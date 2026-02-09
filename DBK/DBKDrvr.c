@@ -18,6 +18,7 @@
 #include "ultimap.h"
 #include "ultimap2.h"
 #include "noexceptions.h"
+#include "SocketComm.h"
 
 
 
@@ -67,8 +68,9 @@ NTSTATUS ZwCreateThread(
 
 
 
-UNICODE_STRING  uszDeviceString;
-PVOID BufDeviceString=NULL;
+// 注意：不再使用设备对象和符号链接
+// UNICODE_STRING  uszDeviceString;  // 已移除
+// PVOID BufDeviceString=NULL;       // 已移除
 
 
 
@@ -148,6 +150,7 @@ NTSTATUS DriverEntry(IN PDRIVER_OBJECT DriverObject,
 Routine Description:
 
     This routine is called when the driver is loaded by NT.
+    注意：本驱动使用Socket通信，不创建设备对象，不使用IRP通信。
 
 Arguments:
 
@@ -163,12 +166,10 @@ Return Value:
 	
 	
     NTSTATUS        ntStatus;
-    PVOID           BufDriverString=NULL,BufProcessEventString=NULL,BufThreadEventString=NULL;
-    UNICODE_STRING  uszDriverString;
+    PVOID           BufProcessEventString=NULL,BufThreadEventString=NULL;
     
     UNICODE_STRING  uszProcessEventString;
 	UNICODE_STRING	uszThreadEventString;
-    PDEVICE_OBJECT  pDeviceObject;
 	HANDLE reg=0;
 	OBJECT_ATTRIBUTES oa;
 
@@ -215,7 +216,11 @@ Return Value:
 	
 	KeServiceDescriptorTable=MmGetSystemRoutineAddress(&temp);         
 
-	DbgPrint("Loading driver\n");
+	DbgPrint("Loading driver (Socket Communication Mode - No Device Object)\n");
+	
+	// 注意：不再创建设备对象，不再使用IRP通信
+	// 所有通信通过Socket完成
+	
 	if (RegistryPath)
 	{	
 		DbgPrint("Registry path = %S\n", RegistryPath->Buffer);
@@ -224,31 +229,21 @@ Return Value:
 		ntStatus=ZwOpenKey(&reg,KEY_QUERY_VALUE,&oa);
 		if (ntStatus == STATUS_SUCCESS)
 		{
-			UNICODE_STRING A,B,C,D;
-			PKEY_VALUE_PARTIAL_INFORMATION bufA,bufB,bufC,bufD;
+			UNICODE_STRING C,D;
+			PKEY_VALUE_PARTIAL_INFORMATION bufC,bufD;
 			ULONG ActualSize;
 
 			DbgPrint("Opened the key\n");
 
-			BufDriverString=ExAllocatePool(PagedPool,sizeof(KEY_VALUE_PARTIAL_INFORMATION)+100);
-			BufDeviceString=ExAllocatePool(PagedPool,sizeof(KEY_VALUE_PARTIAL_INFORMATION)+100);
 			BufProcessEventString=ExAllocatePool(PagedPool,sizeof(KEY_VALUE_PARTIAL_INFORMATION)+100);
 			BufThreadEventString=ExAllocatePool(PagedPool,sizeof(KEY_VALUE_PARTIAL_INFORMATION)+100);
 
-			bufA=BufDriverString;
-			bufB=BufDeviceString;
 			bufC=BufProcessEventString;
 			bufD=BufThreadEventString;
 
-			RtlInitUnicodeString(&A, L"A");
-			RtlInitUnicodeString(&B, L"B");
 			RtlInitUnicodeString(&C, L"C");
 			RtlInitUnicodeString(&D, L"D");
 
-			if (ntStatus == STATUS_SUCCESS)
-				ntStatus=ZwQueryValueKey(reg,&A,KeyValuePartialInformation ,bufA,sizeof(KEY_VALUE_PARTIAL_INFORMATION)+100,&ActualSize);
-			if (ntStatus == STATUS_SUCCESS)
-				ntStatus=ZwQueryValueKey(reg,&B,KeyValuePartialInformation ,bufB,sizeof(KEY_VALUE_PARTIAL_INFORMATION)+100,&ActualSize);
 			if (ntStatus == STATUS_SUCCESS)
 				ntStatus=ZwQueryValueKey(reg,&C,KeyValuePartialInformation ,bufC,sizeof(KEY_VALUE_PARTIAL_INFORMATION)+100,&ActualSize);
 			if (ntStatus == STATUS_SUCCESS)
@@ -257,20 +252,14 @@ Return Value:
 			if (ntStatus == STATUS_SUCCESS)
 			{
 				DbgPrint("Read ok\n");
-				RtlInitUnicodeString(&uszDriverString,(PCWSTR) bufA->Data);
-				RtlInitUnicodeString(&uszDeviceString,(PCWSTR) bufB->Data);
 				RtlInitUnicodeString(&uszProcessEventString,(PCWSTR) bufC->Data);
 				RtlInitUnicodeString(&uszThreadEventString,(PCWSTR) bufD->Data);
 
-				DbgPrint("DriverString=%S\n",uszDriverString.Buffer);
-				DbgPrint("DeviceString=%S\n",uszDeviceString.Buffer);
 				DbgPrint("ProcessEventString=%S\n",uszProcessEventString.Buffer);
 				DbgPrint("ThreadEventString=%S\n",uszThreadEventString.Buffer);
 			}
 			else
 			{
-				ExFreePool(bufA);
-				ExFreePool(bufB);
 				ExFreePool(bufC);
 				ExFreePool(bufD);
 
@@ -291,81 +280,12 @@ Return Value:
 
 	ntStatus = STATUS_SUCCESS;
 
-
-	
-
-
-	if (!loadedbydbvm)
-	{
-
-		// Point uszDriverString at the driver name
-#ifndef CETC
-		
-		
-		// Create and initialize device object
-		ntStatus = IoCreateDevice(DriverObject,
-								  0,
-								  &uszDriverString,
-								  FILE_DEVICE_UNKNOWN,
-								  0,
-								  FALSE,
-								  &pDeviceObject);
-
-		if(ntStatus != STATUS_SUCCESS)
-		{
-			DbgPrint("IoCreateDevice failed\n");
-			ExFreePool(BufDriverString);
-			ExFreePool(BufDeviceString);
-			ExFreePool(BufProcessEventString);
-			ExFreePool(BufThreadEventString);
-
-			
-			if (reg)
-			  ZwClose(reg);
-
-			return ntStatus;
-		}
-
-		// Point uszDeviceString at the device name
-		
-		// Create symbolic link to the user-visible name
-		ntStatus = IoCreateSymbolicLink(&uszDeviceString, &uszDriverString);
-
-		if(ntStatus != STATUS_SUCCESS)
-		{
-			DbgPrint("IoCreateSymbolicLink failed: %x\n",ntStatus);
-			// Delete device object if not successful
-			IoDeleteDevice(pDeviceObject);
-
-			ExFreePool(BufDriverString);
-			ExFreePool(BufDeviceString);
-			ExFreePool(BufProcessEventString);
-			ExFreePool(BufThreadEventString);
-			
-
-			if (reg)
-			  ZwClose(reg);
-
-			return ntStatus;
-		}
-
-#endif
-	}
-
-	//when loaded by dbvm driver object is 'valid' so store the function addresses
-
-
 	DbgPrint("DriverObject=%p\n", DriverObject);
 
-    // Load structure to point to IRP handlers...
-    DriverObject->DriverUnload                         = UnloadDriver;
-    DriverObject->MajorFunction[IRP_MJ_CREATE]         = DispatchCreate;
-    DriverObject->MajorFunction[IRP_MJ_CLOSE]          = DispatchClose;	
-
-	if (loadedbydbvm)
-		DriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL] = (PDRIVER_DISPATCH)DispatchIoctlDBVM;		
-	else
-		DriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL] = DispatchIoctl;
+    // 设置卸载函数
+    DriverObject->DriverUnload = UnloadDriver;
+	
+	// 不再设置IRP处理函数，因为不使用设备对象
 
 
 
@@ -427,13 +347,8 @@ Return Value:
 	debugger_initialize();
 
 
-	// Return success (don't do the devicestring, I need it for unload)
+	// 清理初始化缓冲区
 	DbgPrint("Cleaning up initialization buffers\n");
-	if (BufDriverString)
-	{
-		ExFreePool(BufDriverString);
-		BufDriverString=NULL;
-	}
 
 	if (BufProcessEventString)
 	{
@@ -544,51 +459,52 @@ Return Value:
 
 	RtlInitUnicodeString(&temp, L"PsResumeProcess");
 	PsResumeProcess = MmGetSystemRoutineAddress(&temp);
+
+	// ============================================================
+	// 初始化Socket通信（唯一的通信方式）
+	// ============================================================
+	DbgPrint("==========================================================\n");
+	DbgPrint("Initializing Socket Communication (Primary Communication)\n");
+	DbgPrint("==========================================================\n");
+	
+	ntStatus = SocketComm_Initialize();
+	if (!NT_SUCCESS(ntStatus)) {
+		DbgPrint("[FATAL] Failed to initialize socket communication: 0x%X\n", ntStatus);
+		DbgPrint("Driver cannot function without socket communication!\n");
+		return ntStatus;
+	}
+	
+	DbgPrint("[OK] Socket Communication initialized successfully\n");
+	
+	// 启动Socket监听
+	ntStatus = SocketComm_StartListening();
+	if (!NT_SUCCESS(ntStatus)) {
+		DbgPrint("[FATAL] Failed to start socket listener: 0x%X\n", ntStatus);
+		DbgPrint("Driver cannot function without socket listener!\n");
+		SocketComm_Cleanup();
+		return ntStatus;
+	}
+	
+	DbgPrint("[OK] Socket listener started on port %d\n", SOCKET_SERVER_PORT);
+	DbgPrint("==========================================================\n");
+	DbgPrint("Driver loaded successfully - Socket communication ready\n");
+	DbgPrint("Connect to: 127.0.0.1:%d\n", SOCKET_SERVER_PORT);
+	DbgPrint("==========================================================\n");
 	
     return STATUS_SUCCESS;
 }
 
 
 
-NTSTATUS DispatchCreate(IN PDEVICE_OBJECT DeviceObject,
-                       IN PIRP Irp)
-{
-	// Check for SeDebugPrivilege. (So only processes with admin rights can use it)
-
-	LUID sedebugprivUID;
-	sedebugprivUID.LowPart=SE_DEBUG_PRIVILEGE;
-	sedebugprivUID.HighPart=0;
-
-	Irp->IoStatus.Status = STATUS_UNSUCCESSFUL;
-
-
-
-	if (SeSinglePrivilegeCheck(sedebugprivUID, UserMode))
-	{		
-		Irp->IoStatus.Status = STATUS_SUCCESS;
-	}
-	else
-	{
-		DbgPrint("A process without SeDebugPrivilege tried to open the dbk driver\n");
-		Irp->IoStatus.Status = STATUS_UNSUCCESSFUL;
-	}
-
-    Irp->IoStatus.Information=0;
-
-    IoCompleteRequest(Irp, IO_NO_INCREMENT);
-    return Irp->IoStatus.Status;
-}
-
-
-NTSTATUS DispatchClose(IN PDEVICE_OBJECT DeviceObject,
-                       IN PIRP Irp)
-{
-    Irp->IoStatus.Status = STATUS_SUCCESS;
-    Irp->IoStatus.Information=0;
-
-    IoCompleteRequest(Irp, IO_NO_INCREMENT);
-    return Irp->IoStatus.Status;
-}
+// ============================================================
+// 注意：以下IRP处理函数已被移除，因为不再使用设备对象
+// 所有通信都通过Socket完成
+// ============================================================
+// 
+// 原有的 DispatchCreate 和 DispatchClose 函数已移除
+// 权限检查现在在Socket连接时进行
+//
+// ============================================================
 
 
 typedef NTSTATUS (*PSRCTNR)(__in PCREATE_THREAD_NOTIFY_ROUTINE NotifyRoutine);
@@ -601,18 +517,33 @@ PSRLINR PsRemoveLoadImageNotifyRoutine2;
 
 void UnloadDriver(PDRIVER_OBJECT DriverObject)
 {
+	DbgPrint("==========================================================\n");
+	DbgPrint("Unloading DBK Driver (Socket Communication Mode)\n");
+	DbgPrint("==========================================================\n");
+	
 	if (!debugger_stopDebugging())
 	{
 		DbgPrint("Can not unload the driver because of debugger\n");
-		return; //
+		return;
 	}
 
+	// 首先清理Socket通信（最重要）
+	DbgPrint("[1/5] Cleaning up Socket Communication...\n");
+	SocketComm_Cleanup();
+	DbgPrint("[OK] Socket Communication cleaned up\n");
+
+	DbgPrint("[2/5] Disabling Ultimap...\n");
 	ultimap_disable();
 	DisableUltimap2();
+	DbgPrint("[OK] Ultimap disabled\n");
 
+	DbgPrint("[3/5] Cleaning APIC...\n");
 	clean_APIC_BASE();
+	DbgPrint("[OK] APIC cleaned\n");
 
+	DbgPrint("[4/5] Cleaning up NoExceptions...\n");
 	NoExceptions_Cleanup();
+	DbgPrint("[OK] NoExceptions cleaned up\n");
 	
 
 	if (KeServiceDescriptorTableShadow && registered) //I can't unload without a shadotw table (system service registered)
@@ -672,20 +603,15 @@ void UnloadDriver(PDRIVER_OBJECT DriverObject)
 	}
 
 
-	DbgPrint("Driver unloading\n");
+	DbgPrint("[5/5] Final cleanup...\n");
 
-    IoDeleteDevice(DriverObject->DeviceObject);
+	// 注意：不再删除设备对象，因为我们没有创建设备对象
+	// 所有通信都通过Socket完成
 
 #ifdef CETC
 #ifndef CETC_RELEASE
 	UnloadCETC(); //not possible in the final build
 #endif
-#endif
-
-#ifndef CETC_RELEASE
-	DbgPrint("DeviceString=%S\n",uszDeviceString.Buffer);
-	DbgPrint("IoDeleteSymbolicLink: %x\n", IoDeleteSymbolicLink(&uszDeviceString));
-	ExFreePool(BufDeviceString);
 #endif
 
 	CleanProcessList();
@@ -697,9 +623,14 @@ void UnloadDriver(PDRIVER_OBJECT DriverObject)
 #if (NTDDI_VERSION >= NTDDI_VISTA)
 	if (DRMHandle)
 	{
-		DbgPrint("Unregistering DRM handle");
+		DbgPrint("Unregistering DRM handle\n");
 		ObUnRegisterCallbacks(DRMHandle);
 		DRMHandle = NULL;
 	}
 #endif
+
+	DbgPrint("[OK] Final cleanup completed\n");
+	DbgPrint("==========================================================\n");
+	DbgPrint("DBK Driver unloaded successfully\n");
+	DbgPrint("==========================================================\n");
 }
